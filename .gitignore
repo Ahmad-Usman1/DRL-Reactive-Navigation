@@ -1,4 +1,34 @@
-﻿venv/
+﻿# venv/
+# __pycache__/
+# *.pyc
+# .vscode/
+
+# === Virtual Environment ===
+# Never push your python environment. It is huge and specific to your OS/hardware.
+venv/
+
+# === Python Cache ===
+# Compiled python byte-code. Git doesn't need to track this.
 __pycache__/
 *.pyc
+*.pyo
+
+# === RL Training Data ===
+# Tensorboard logs get massive quickly.
+logs/
+
+# Saved neural network checkpoints. 
+# (You only want to manually commit a final, proven model, not the intermediate trash).
+models/
+
+# === IDE & OS Files ===
+# VS Code workspace settings
+*.code-workspace
 .vscode/
+
+# Windows thumbnail cache
+Thumbs.db
+
+# Debugging files
+Test_debug.py
+Testscript.py
