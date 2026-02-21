@@ -58,7 +58,7 @@ def main():
         tensorboard_log=LOG_DIR, # <--- We will use this instead of the plot window
         learning_rate=1e-4,
         n_steps=2048,
-        batch_size=64,
+        batch_size=256,
         n_epochs=10,
         gamma=0.99,
         gae_lambda=0.95,
