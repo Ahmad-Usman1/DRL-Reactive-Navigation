@@ -4,6 +4,7 @@ import numpy as np
 import math
 from numba import njit
 from MapGenerator import MapGenerator
+from MapBank import MapBank
 
 # --- HIGH-PERFORMANCE C-COMPILED RAYCASTER ---
 # This bypasses Python's slow loops entirely.
@@ -72,6 +73,9 @@ class PeopleBotEnv(gym.Env):
         self.waypoint_radius = 1.0  
         self.goal_radius = 1.0      
         
+        # Map Bank
+        self.map_bank = MapBank(dataset_dir="training_maps")
+
         # Spaces
         high_obs = np.array([self.max_sensor_range] * 16 + [20.0, np.pi], dtype=np.float32)
         self.observation_space = spaces.Box(low=-high_obs, high=high_obs, dtype=np.float32)
@@ -98,8 +102,11 @@ class PeopleBotEnv(gym.Env):
         super().reset(seed=seed)
         
         # Only generate a new map every 50 episodes
-        if self.map_grid is None or (self.episode_count % self.map_reload_interval == 0):
-            self.map_grid, self.waypoints, self.resolution = MapGenerator.generate(20, 20)
+        # if self.map_grid is None or (self.episode_count % self.map_reload_interval == 0):
+        #     self.map_grid, self.waypoints, self.resolution = MapGenerator.generate(20, 20)
+
+        # Select a random map from mapbank
+        self.grid_map, self.waypoints, self.resolution = self.map_bank.get_random_map()
             
         self.episode_count += 1
             

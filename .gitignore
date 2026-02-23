@@ -29,6 +29,14 @@ models/
 # Windows thumbnail cache
 Thumbs.db
 
+# One time use files 
+Mapbank.py
+GenerateDataset.py
+
 # Debugging files
 Test_debug.py
 Testscript.py
+Test_mapbank.py
+
+# Training files
+training_maps/
