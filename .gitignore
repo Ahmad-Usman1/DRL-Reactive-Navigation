@@ -40,3 +40,5 @@ Test_mapbank.py
 
 # Training files
 training_maps/
+ppo_tensorboard/
+saved_models/

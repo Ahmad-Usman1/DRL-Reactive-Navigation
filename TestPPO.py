@@ -13,110 +13,131 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Circle, Arrow
 from stable_baselines3 import PPO
 
-# Import your Environment
 from PeopleBotEnv import PeopleBotEnv
+from MapGenerator import MapGenerator
 
 # --- CONFIGURATION ---
-MODEL_PATH = "models/ppo_peoplebot_final"
+MODEL_DIR = "saved_models"
+MODEL_PREFIX = "BEANS_PPO"
 RENDER_FPS = 30 
 RENDER_SKIP = 2 
 
-def main():
-    print("--- DIAGNOSTIC MODE (FIXED) ACTIVATED ---")
-    
-    # 1. Load Environment
-    env = PeopleBotEnv()
+# --- DYNAMIC TEST ENVIRONMENT ---
+class DynamicTestEnv(PeopleBotEnv):
+    """Overrides the reset function to generate fresh maps dynamically instead of using the RAM Bank."""
+    def reset(self, seed=None, options=None):
+        # Explicitly call the base Gym reset to handle random seeds, skipping PeopleBotEnv's reset
+        gym.Env.reset(self, seed=seed)
+        
+        # 1. Bypass MapBank, generate a completely new 40x40 map
+        self.map_grid, self.waypoints, self.resolution = MapGenerator.generate(40, 40)
+            
+        start_pt = self.waypoints[0]
+        if len(self.waypoints) > 1:
+            self.current_goal_index = 1
+            self.current_goal = np.array(self.waypoints[1])
+            start_theta = math.atan2(self.current_goal[1] - start_pt[1], 
+                                     self.current_goal[0] - start_pt[0])
+        else:
+            self.current_goal_index = 0
+            self.current_goal = np.array(start_pt)
+            start_theta = 0.0
+            
+        self.current_pose = np.array([start_pt[0], start_pt[1], start_theta])
+        self.current_lin_vel = 0.0
+        self.current_ang_vel = 0.0
+        self.previous_distance = np.linalg.norm(self.current_pose[:2] - self.current_goal)
+        self.current_step = 0
+        
+        return self._get_obs(), {}
 
-    # 2. Load Model
-    load_path = MODEL_PATH
-    if not os.path.exists(load_path + ".zip"):
-        if os.path.exists("models"):
-            models = [f for f in os.listdir("models") if f.endswith(".zip")]
-            if models:
-                load_path = os.path.join("models", models[-1]).replace(".zip", "")
+def main():
+    print("--- DIAGNOSTIC PIPELINE ACTIVATED ---")
+    
+    # 1. Load Model
+    if not os.path.exists(MODEL_DIR):
+        print(f"FATAL ERROR: Directory '{MODEL_DIR}' not found.")
+        return
+        
+    models = [f for f in os.listdir(MODEL_DIR) if f.endswith(".zip")]
+    if not models:
+        print("FATAL ERROR: No trained models found in directory.")
+        return
+        
+    # Grab the most recently saved model
+    latest_model = sorted(models)[-1]
+    load_path = os.path.join(MODEL_DIR, latest_model).replace(".zip", "")
     
     print(f"Loading Brain: {load_path}")
     model = PPO.load(load_path)
 
-    # 3. Setup Visualization
+    # 2. Load Dynamic Environment
+    env = DynamicTestEnv()
+
+    # ==========================================
+    # PHASE 1: VISUALIZATION (3 MAPS)
+    # ==========================================
+    print("\n--- PHASE 1: VISUAL EVALUATION (3 MAPS) ---")
     plt.ion()
     fig, ax = plt.subplots(figsize=(10, 10))
     ax.set_aspect('equal')
     
-    # Map & Objects
-    obs, _ = env.reset() 
-    # Invert map for display (0=White, 1=Black)
-    map_display = ax.imshow(1 - env.map_grid, cmap='Greys', origin='lower', 
-                            extent=[0, 20, 0, 20], vmin=0, vmax=1)
-
-    robot_patch = Circle((0, 0), env.robot_radius, color='blue', zorder=10, alpha=0.8, label='Robot')
-    ax.add_patch(robot_patch)
-    
-    arrow_patch = Arrow(0, 0, 0.5, 0, width=0.3, color='yellow', zorder=11)
-    ax.add_patch(arrow_patch)
-    
-    goal_patch, = ax.plot([], [], 'g*', markersize=18, zorder=9, label='Goal')
-    
-    goal_zone = Circle((0,0), env.waypoint_radius, color='green', fill=False, linestyle='--', linewidth=2, zorder=8)
-    ax.add_patch(goal_zone)
-    
-    lidar_lines = [Line2D([], [], color='red', linewidth=1, alpha=0.5, zorder=5) for _ in range(16)]
-    for l in lidar_lines: ax.add_line(l)
-    
-    # HUD
-    stats_text = ax.text(0.5, 19.5, 'Initializing...', color='black', fontsize=10, 
-                         fontfamily='monospace', fontweight='bold', verticalalignment='top',
-                         bbox=dict(facecolor='white', alpha=0.9, edgecolor='black', boxstyle='round'))
-
-    ax.legend(loc='upper right')
-    
-    # --- SIMULATION LOOP ---
-    num_episodes = 5
-    
-    for ep in range(num_episodes):
+    for ep in range(3):
         obs, _ = env.reset()
         done = False
         truncated = False
         total_reward = 0
         step_count = 0
         
-        # Reset Map Display
-        map_display.set_data(1 - env.map_grid)
-        ax.set_title(f"Episode {ep+1}")
+        ax.clear()
+        ax.set_title(f"Visual Run {ep+1}/3")
         
-        print(f"\n--- Episode {ep+1} Start ---")
+        # Plot Map (Fixed for 40x40m bounds)
+        ax.imshow(1 - env.map_grid, cmap='Greys', origin='lower', 
+                  extent=[0, 40, 0, 40], vmin=0, vmax=1)
         
-        # DIAGNOSTIC: Check Spawn Safety
-        spawn_safety = np.min(obs[:16])
-        print(f"Spawn Lidar Min Dist: {spawn_safety:.2f}m")
+        # Plot Global Waypoint Path
+        wp_array = np.array(env.waypoints)
+        ax.plot(wp_array[:, 0], wp_array[:, 1], 'r--', alpha=0.5, zorder=4, label='Global Path')
+        
+        robot_patch = Circle((env.current_pose[0], env.current_pose[1]), env.robot_radius, color='blue', zorder=10, alpha=0.8, label='Robot')
+        ax.add_patch(robot_patch)
+        
+        arrow_patch = Arrow(0, 0, 0.5, 0, width=0.3, color='yellow', zorder=11)
+        ax.add_patch(arrow_patch)
+        
+        goal_patch, = ax.plot([env.current_goal[0]], [env.current_goal[1]], 'g*', markersize=18, zorder=9, label='Current Goal')
+        goal_zone = Circle((env.current_goal[0], env.current_goal[1]), env.waypoint_radius, color='green', fill=False, linestyle='--', linewidth=2, zorder=8)
+        ax.add_patch(goal_zone)
+        
+        lidar_lines = [Line2D([], [], color='red', linewidth=1, alpha=0.5, zorder=5) for _ in range(16)]
+        for l in lidar_lines: ax.add_line(l)
+        
+        stats_text = ax.text(0.5, 39.5, 'Initializing...', color='black', fontsize=10, 
+                             fontfamily='monospace', fontweight='bold', verticalalignment='top',
+                             bbox=dict(facecolor='white', alpha=0.9, edgecolor='black', boxstyle='round'))
+        
+        ax.legend(loc='upper right')
         
         while not done and not truncated:
-            # RESTORE WIGGLES (Stochastic Policy) to fix wall clipping
-            action, _ = model.predict(obs, deterministic=False)
-            
+            # Deterministic=True tests the pure policy without exploration noise
+            action, _ = model.predict(obs, deterministic=True)
             obs, reward, done, truncated, info = env.step(action)
             total_reward += reward
             step_count += 1
             
-            # Visuals
             if step_count % RENDER_SKIP == 0:
                 rx, ry, theta = env.current_pose
-                gx, gy = env.current_goal  # Unpacks into two floats
+                gx, gy = env.current_goal 
                 
-                # Robot
                 robot_patch.center = (rx, ry)
-                
-                # Arrow (Recreate to rotate)
                 arrow_patch.remove()
-                arrow_patch = Arrow(rx, ry, 0.6*math.cos(theta), 0.6*math.sin(theta), 
-                                    width=0.3, color='yellow', zorder=11)
+                arrow_patch = Arrow(rx, ry, 0.6*math.cos(theta), 0.6*math.sin(theta), width=0.3, color='yellow', zorder=11)
                 ax.add_patch(arrow_patch)
                 
-                # Goal & Zone (FIXED: No indexing needed here)
                 goal_patch.set_data([gx], [gy])
                 goal_zone.center = (gx, gy)
                 
-                # Lidar
                 scan = obs[:16]
                 angles = theta + env.sensor_angles
                 for i, line in enumerate(lidar_lines):
@@ -130,23 +151,65 @@ def main():
                 
                 hud_txt = (f"Vel: {env.current_lin_vel:.2f} m/s\n"
                            f"Ang: {env.current_ang_vel:.2f} rad/s\n"
-                           f"Rew: {total_reward:.1f}")
+                           f"Rew: {total_reward:.1f}\n"
+                           f"Step: {step_count}/{env.max_steps}")
                 stats_text.set_text(hud_txt)
                 
                 plt.draw()
                 plt.pause(1 / RENDER_FPS)
-        
-        if total_reward > 0:
-            ax.set_title(f"Ep {ep+1}: SUCCESS ({total_reward:.1f})", color='green', fontweight='bold')
-            print(f"-> Episode Result: SUCCESS (+{total_reward:.1f})")
-        else:
-            ax.set_title(f"Ep {ep+1}: FAILED ({total_reward:.1f})", color='red', fontweight='bold')
-            print(f"-> Episode Result: CRASHED ({total_reward:.1f})")
-            
-        time.sleep(1.0)
+                
+        time.sleep(1.0) # Pause to see final result
 
     plt.ioff()
-    plt.show()
+    plt.close()
+
+    # ==========================================
+    # PHASE 2: HEADLESS BENCHMARK (20 MAPS)
+    # ==========================================
+    print("\n--- PHASE 2: HEADLESS BENCHMARK (20 MAPS) ---")
+    num_headless = 20
+    
+    success_count = 0
+    crash_count = 0
+    timeout_count = 0
+    
+    for ep in range(num_headless):
+        obs, _ = env.reset()
+        done = False
+        truncated = False
+        step_count = 0
+        total_reward = 0.0
+        
+        while not done and not truncated:
+            action, _ = model.predict(obs, deterministic=True)
+            obs, reward, done, truncated, info = env.step(action)
+            step_count += 1
+            total_reward += reward
+            
+        # Analyze outcome
+        if done and reward <= -10.0:  # The collision penalty
+            outcome = "CRASHED"
+            crash_count += 1
+        elif done:
+            outcome = "SUCCESS"
+            success_count += 1
+        elif truncated:
+            outcome = "TIMEOUT"
+            timeout_count += 1
+            
+        progress_pct = (env.current_goal_index / len(env.waypoints)) * 100
+            
+        print(f"Map {ep+1:02d} | Result: {outcome:<7} | Steps: {step_count:04d} | Reward: {total_reward:7.1f} | Path Cleared: {progress_pct:5.1f}%")
+
+    # --- FINAL REPORT ---
+    print("\n==================================")
+    print("      FINAL ROBUSTNESS REPORT     ")
+    print("==================================")
+    print(f"Total Maps Evaluated: {num_headless}")
+    print(f"Success Rate:         {(success_count/num_headless)*100:.1f}% ({success_count})")
+    print(f"Crash Rate:           {(crash_count/num_headless)*100:.1f}% ({crash_count})")
+    print(f"Timeout Rate:         {(timeout_count/num_headless)*100:.1f}% ({timeout_count})")
+    print("==================================\n")
 
 if __name__ == "__main__":
     main()

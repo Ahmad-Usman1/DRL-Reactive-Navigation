@@ -3,11 +3,9 @@ from gymnasium import spaces
 import numpy as np
 import math
 from numba import njit
-from MapGenerator import MapGenerator
 from MapBank import MapBank
 
 # --- HIGH-PERFORMANCE C-COMPILED RAYCASTER ---
-# This bypasses Python's slow loops entirely.
 @njit(fastmath=True)
 def fast_raycast(rx, ry, rth, angles, map_grid, resolution, max_range):
     scan = np.zeros(16, dtype=np.float32)
@@ -16,7 +14,6 @@ def fast_raycast(rx, ry, rth, angles, map_grid, resolution, max_range):
     
     for i in range(16):
         glob_angle = rth + angles[i]
-        # Step size of 2 pixels for speed
         dx = math.cos(glob_angle) * 2.0
         dy = math.sin(glob_angle) * 2.0
         
@@ -30,7 +27,6 @@ def fast_raycast(rx, ry, rth, angles, map_grid, resolution, max_range):
             curr_y += dy
             ix, iy = int(curr_x), int(curr_y)
             
-            # Bound & Wall Check
             if ix < 0 or ix >= w or iy < 0 or iy >= h: 
                 break
             if map_grid[iy, ix] == 1: 
@@ -43,7 +39,8 @@ def fast_raycast(rx, ry, rth, angles, map_grid, resolution, max_range):
 
 class PeopleBotEnv(gym.Env):
     """
-    PeopleBotEnv - Phase 2 Physics (Fixed Reward & Speed)
+    PeopleBotEnv - Phase 3 Physics (Anti-Cowering Economy)
+    Optimized for MapBank integration, RL bounds safety, and active progression.
     """
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
 
@@ -73,11 +70,11 @@ class PeopleBotEnv(gym.Env):
         self.waypoint_radius = 1.0  
         self.goal_radius = 1.0      
         
-        # Map Bank
+        # --- MAP BANK INTEGRATION ---
         self.map_bank = MapBank(dataset_dir="training_maps")
 
         # Spaces
-        high_obs = np.array([self.max_sensor_range] * 16 + [20.0, np.pi], dtype=np.float32)
+        high_obs = np.array([self.max_sensor_range] * 16 + [60.0, np.pi], dtype=np.float32)
         self.observation_space = spaces.Box(low=-high_obs, high=high_obs, dtype=np.float32)
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
         
@@ -94,21 +91,15 @@ class PeopleBotEnv(gym.Env):
         self.current_goal = np.zeros(2)
         self.previous_distance = 0.0
         
-        # --- CRITICAL FIX: MAP CACHING ---
-        self.episode_count = 0
-        self.map_reload_interval = 1 
+        # --- DOOMSDAY CLOCK (Truncation Limit) ---
+        self.current_step = 0
+        self.max_steps = 1000  # 100 seconds of simulation time per map. Move or die.
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         
-        # Only generate a new map every 50 episodes
-        # if self.map_grid is None or (self.episode_count % self.map_reload_interval == 0):
-        #     self.map_grid, self.waypoints, self.resolution = MapGenerator.generate(20, 20)
-
-        # Select a random map from mapbank
-        self.grid_map, self.waypoints, self.resolution = self.map_bank.get_random_map()
-            
-        self.episode_count += 1
+        # Fetch fresh map
+        self.map_grid, self.waypoints, self.resolution = self.map_bank.get_random_map()
             
         start_pt = self.waypoints[0]
         if len(self.waypoints) > 1:
@@ -126,9 +117,15 @@ class PeopleBotEnv(gym.Env):
         self.current_ang_vel = 0.0
         self.previous_distance = np.linalg.norm(self.current_pose[:2] - self.current_goal)
         
+        # Reset the clock
+        self.current_step = 0
+        
         return self._get_obs(), {}
 
     def step(self, action):
+        # Increment Clock
+        self.current_step += 1
+        
         # 1. Action Scaling
         norm_lin = np.clip(action[0], -1.0, 1.0)
         norm_ang = np.clip(action[1], -1.0, 1.0)
@@ -171,8 +168,7 @@ class PeopleBotEnv(gym.Env):
                 self.previous_distance = np.linalg.norm(self.current_pose[:2] - self.current_goal)
                 dist_to_goal = self.previous_distance
             else:
-                if dist_to_goal < self.goal_radius:
-                    hit_final_goal = True
+                hit_final_goal = True
 
         # 6. Observation
         obs = self._get_obs()
@@ -180,7 +176,7 @@ class PeopleBotEnv(gym.Env):
         heading_error = obs[17]
         is_collided = self._check_collision()
 
-        # 7. REWARD ECONOMY (Fixed)
+        # 7. REWARD ECONOMY
         reward = -0.01 
         
         # Progress
@@ -189,10 +185,10 @@ class PeopleBotEnv(gym.Env):
         self.previous_distance = dist_to_goal
         reward += (0.1 * math.cos(heading_error)) * self.current_lin_vel
         
-        # --- ANTI-VIBRATION TAX ---
-        reward -= (0.01 * abs(self.current_ang_vel)) # Spin penalty
+        # Anti-Vibration Tax
+        reward -= (0.01 * abs(self.current_ang_vel))
         if self.current_lin_vel < -0.01:
-            reward -= 0.05 # Reversing penalty
+            reward -= 0.05 
             
         # Safety Penalty
         min_dist = np.min(scan_data)
@@ -202,23 +198,28 @@ class PeopleBotEnv(gym.Env):
             reward -= (vel_multiplier * danger_level) * 0.1
             
         terminated = False
+        truncated = False
+        
+        # --- BUFFED REWARDS ---
         if hit_checkpoint:
-            reward += 2.0
+            reward += 10.0
         if is_collided:
             reward -= 20.0
             terminated = True
         elif hit_final_goal:
-            reward += 10.0
+            reward += 50.0
             terminated = True
             
-        return obs, reward, terminated, False, {}
+        # --- TRUNCATION CHECK ---
+        if self.current_step >= self.max_steps:
+            truncated = True
+            
+        return obs, reward, terminated, truncated, {}
 
     def _get_obs(self):
-        # Call the blazing fast Numba function
         scan_data = fast_raycast(self.current_pose[0], self.current_pose[1], self.current_pose[2],
                                  self.sensor_angles, self.map_grid, self.resolution, self.max_sensor_range)
         
-        # Add slight realistic noise
         noise = np.random.randn(16) * 0.02
         scan_data = np.clip(scan_data + noise, 0, self.max_sensor_range)
         
