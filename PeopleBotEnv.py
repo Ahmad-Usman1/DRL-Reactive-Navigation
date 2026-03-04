@@ -39,31 +39,37 @@ def fast_raycast(rx, ry, rth, angles, map_grid, resolution, max_range):
 
 class PeopleBotEnv(gym.Env):
     """
-    PeopleBotEnv - Phase 3 Physics (Anti-Cowering Economy)
-    Optimized for MapBank integration, RL bounds safety, and active progression.
+    PeopleBotEnv - Phase 4 Physics (Hardware Ground-Truth)
+    Accurate to ActivMedia Perf PB kinematics, dynamics, and safety thresholds.
     """
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
 
     def __init__(self):
         super(PeopleBotEnv, self).__init__()
         
-        # Physical Constants
-        self.wheel_radius = 0.0975  
+        # --- TRUE HARDWARE SPECS (ActivMedia Perf PB) ---
+        self.wheel_radius = 0.0955  
         self.wheel_base = 0.33      
-        self.robot_radius = 0.35    
+        self.robot_radius = 0.31    
         
-        # Constraints
-        self.max_lin_vel = 0.8      
-        self.min_lin_vel = -0.2     
-        self.max_ang_vel = 1.0      
-        self.max_wheel_omega = 12.3 
+        # Kinematic Limits
+        self.max_lin_vel = 0.8 #0.9 actual limit, reduced for safety margin
+        self.min_lin_vel = -0.3     
+        self.max_ang_vel = 2.5 #2.618 actual limit, reduced for safety margin
+
+        self.prev_action = np.zeros(2, dtype=np.float32)
         
-        # Inertia
+        # Max motor RPM based on wheel limits
+        self.max_wheel_omega = (self.max_lin_vel + (self.max_ang_vel * self.wheel_base / 2.0)) / self.wheel_radius
+        
+        # Dynamics Parameters
         self.dt = 0.1
         self.current_lin_vel = 0.0
         self.current_ang_vel = 0.0
-        self.max_lin_accel = 2.0    
-        self.max_ang_accel = 3.0    
+        self.tau_motor = 0.30 # 300ms mechanical time constant for a heavy chassis
+        
+        # Safety Thresholds
+        self.tipping_threshold = 2.0 # m/s^2 (Centrifugal limit for 1.24m tall CoG)
         
         # Sensor & Nav
         self.max_sensor_range = 5.0
@@ -90,16 +96,25 @@ class PeopleBotEnv(gym.Env):
         self.current_goal_index = 0
         self.current_goal = np.zeros(2)
         self.previous_distance = 0.0
-        
-        # --- DOOMSDAY CLOCK (Truncation Limit) ---
         self.current_step = 0
-        self.max_steps = 1000  # 100 seconds of simulation time per map. Move or die.
+        self.max_steps = 2000  
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
+
+        self.prev_action = np.zeros(2, dtype=np.float32)
+        
+        # --- TELEMETRY TRACKERS ---
+        self.ep_velocity_history = []
+        self.ep_min_lidar_history = []
+        self.ep_vibration_count = 0
+        self.ep_checkpoints_hit = 0
         
         # Fetch fresh map
         self.map_grid, self.waypoints, self.resolution = self.map_bank.get_random_map()
+        
+        # Total checkpoints is waypoints minus the starting point
+        self.total_checkpoints = max(1, len(self.waypoints) - 1)
             
         start_pt = self.waypoints[0]
         if len(self.waypoints) > 1:
@@ -116,23 +131,23 @@ class PeopleBotEnv(gym.Env):
         self.current_lin_vel = 0.0
         self.current_ang_vel = 0.0
         self.previous_distance = np.linalg.norm(self.current_pose[:2] - self.current_goal)
-        
-        # Reset the clock
         self.current_step = 0
         
         return self._get_obs(), {}
 
     def step(self, action):
-        # Increment Clock
         self.current_step += 1
         
-        # 1. Action Scaling
+        action_delta = np.abs(action - self.prev_action)
+        self.prev_action = action.copy()
+
+        # 1. Action Scaling (Mapped to true PB limits)
         norm_lin = np.clip(action[0], -1.0, 1.0)
         norm_ang = np.clip(action[1], -1.0, 1.0)
         req_v = norm_lin * self.max_lin_vel if norm_lin >= 0 else abs(norm_lin) * self.min_lin_vel
         req_w = norm_ang * self.max_ang_vel
         
-        # 2. Diff Drive Limits
+        # 2. Diff Drive Kinematic Limits
         req_wl = (req_v - (req_w * self.wheel_base / 2.0)) / self.wheel_radius
         req_wr = (req_v + (req_w * self.wheel_base / 2.0)) / self.wheel_radius
         max_req_omega = max(abs(req_wl), abs(req_wr))
@@ -144,19 +159,22 @@ class PeopleBotEnv(gym.Env):
         target_v = (self.wheel_radius / 2.0) * (req_wl + req_wr)
         target_w = (self.wheel_radius / self.wheel_base) * (req_wr - req_wl)
         
-        # 3. Inertia
-        delta_v = np.clip(target_v - self.current_lin_vel, -self.max_lin_accel*self.dt, self.max_lin_accel*self.dt)
-        delta_w = np.clip(target_w - self.current_ang_vel, -self.max_ang_accel*self.dt, self.max_ang_accel*self.dt)
-        self.current_lin_vel += delta_v
-        self.current_ang_vel += delta_w
+        # 3. First-Order Motor Inertia (Emulating mass)
+        alpha = self.dt / (self.tau_motor + self.dt)
+        self.current_lin_vel += alpha * (target_v - self.current_lin_vel)
+        self.current_ang_vel += alpha * (target_w - self.current_ang_vel)
         
-        # 4. Kinematics
+        # 4. Kinematics Update
         theta = self.current_pose[2]
         self.current_pose[0] += self.current_lin_vel * np.cos(theta) * self.dt
         self.current_pose[1] += self.current_lin_vel * np.sin(theta) * self.dt
         self.current_pose[2] = self._angdiff(0, theta + self.current_ang_vel * self.dt)
         
-        # 5. Goal Logic
+        # 5. DYNAMICS CHECK: Centrifugal Tipping
+        centrifugal_accel = abs(self.current_lin_vel * self.current_ang_vel)
+        is_tipped = centrifugal_accel > self.tipping_threshold
+        
+        # 6. Goal Logic
         dist_to_goal = np.linalg.norm(self.current_pose[:2] - self.current_goal)
         hit_checkpoint, hit_final_goal = False, False
         
@@ -168,53 +186,88 @@ class PeopleBotEnv(gym.Env):
                 self.previous_distance = np.linalg.norm(self.current_pose[:2] - self.current_goal)
                 dist_to_goal = self.previous_distance
             else:
-                hit_final_goal = True
+                if dist_to_goal < self.goal_radius:
+                    hit_final_goal = True
 
-        # 6. Observation
+        # 7. Observation
         obs = self._get_obs()
         scan_data = obs[:16]
         heading_error = obs[17]
         is_collided = self._check_collision()
+        min_dist = np.min(scan_data) # Extracted once to use in logging and rewards
 
-        # 7. REWARD ECONOMY
-        reward = -0.01 
+        # 8. REWARD ECONOMY
+        reward = -0.01 # Standard time tax
+
+        # Deadzone: 0.4 is a massive swing (20% of the total -1 to 1 joystick range).
+        # Smooth driving stays below this. Vibration instantly triggers it.
+        if action_delta[0] > 0.4:
+            reward -= 0.05 * action_delta[0] 
         
-        # Progress
+        if action_delta[1] > 0.4:
+            reward -= 0.05 * action_delta[1]
+        
+        # Distance Progress
         dist_improvement = self.previous_distance - dist_to_goal
         reward += (0.5 * dist_improvement)
         self.previous_distance = dist_to_goal
-        reward += (0.1 * math.cos(heading_error)) * self.current_lin_vel
         
-        # Anti-Vibration Tax
-        reward -= (0.01 * abs(self.current_ang_vel))
-        if self.current_lin_vel < -0.01:
-            reward -= 0.05 
+        # Velocity & Alignment
+        reward += (0.1 * math.cos(heading_error)) * self.current_lin_vel
             
-        # Safety Penalty
-        min_dist = np.min(scan_data)
-        if min_dist < 0.75:
-            danger_level = 0.75 - min_dist
+        # The 0.40m Dynamic Safety Net
+        if min_dist < 0.40:
+            danger_level = 0.40 - min_dist
             vel_multiplier = 1.0 + (5.0 * abs(self.current_lin_vel))
             reward -= (vel_multiplier * danger_level) * 0.1
             
         terminated = False
         truncated = False
         
-        # --- BUFFED REWARDS ---
+        # Sparse Rewards
         if hit_checkpoint:
             reward += 10.0
+            
         if is_collided:
-            reward -= 20.0
+            reward -= 50.0 
+            terminated = True
+        elif is_tipped: 
+            reward -= 50.0
             terminated = True
         elif hit_final_goal:
             reward += 50.0
             terminated = True
             
-        # --- TRUNCATION CHECK ---
         if self.current_step >= self.max_steps:
             truncated = True
             
-        return obs, reward, terminated, truncated, {}
+        # --- 9. TELEMETRY LOGGING (The Hard Data) ---
+        self.ep_velocity_history.append(self.current_lin_vel)
+        self.ep_min_lidar_history.append(min_dist)
+        
+        if action_delta[0] > 0.4 or action_delta[1] > 0.4:
+            self.ep_vibration_count += 1
+            
+        if hit_checkpoint:
+            self.ep_checkpoints_hit += 1
+
+        info = {}
+        if terminated or truncated:
+            avg_vel = float(np.mean(self.ep_velocity_history)) if self.ep_velocity_history else 0.0
+            avg_lidar = float(np.mean(self.ep_min_lidar_history)) if self.ep_min_lidar_history else 0.0
+            capture_rate = float(self.ep_checkpoints_hit / self.total_checkpoints)
+            
+            info["telemetry"] = {
+                "avg_velocity": avg_vel,
+                "avg_wall_clearance": avg_lidar,
+                "vibration_events": float(self.ep_vibration_count),
+                "checkpoint_capture_rate": capture_rate,
+                "rate_success": 1.0 if hit_final_goal else 0.0,
+                "rate_crash": 1.0 if (is_collided or is_tipped) else 0.0,
+                "rate_timeout": 1.0 if truncated and not (hit_final_goal or is_collided or is_tipped) else 0.0
+            }
+            
+        return obs, reward, terminated, truncated, info
 
     def _get_obs(self):
         scan_data = fast_raycast(self.current_pose[0], self.current_pose[1], self.current_pose[2],
@@ -233,7 +286,7 @@ class PeopleBotEnv(gym.Env):
     def _check_collision(self):
         cx, cy = self.current_pose[0], self.current_pose[1]
         if self._is_occupied(cx, cy): return True
-        for ang in np.linspace(0, 2*np.pi, 8, endpoint=False):
+        for ang in np.linspace(0, 2*np.pi, 24, endpoint=False):
             px = cx + self.robot_radius * math.cos(ang)
             py = cy + self.robot_radius * math.sin(ang)
             if self._is_occupied(px, py): return True

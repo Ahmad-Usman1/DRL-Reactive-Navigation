@@ -43,7 +43,7 @@ class MapGenerator:
         clutter_size_m = 0.35 
         clutter_px = int(round(clutter_size_m * resolution))
 
-        safe_radius_m = 0.35 
+        safe_radius_m = 0.50 
         safe_radius_px = int(round(safe_radius_m * resolution))
 
         valid_map = False
