@@ -31,6 +31,15 @@ class DynamicTestEnv(PeopleBotEnv):
         # Explicitly call the base Gym reset to handle random seeds, skipping PeopleBotEnv's reset
         gym.Env.reset(self, seed=seed)
         
+        # --- TELEMETRY TRACKERS ---
+        self.ep_velocity_history = []
+        self.ep_min_lidar_history = []
+        self.ep_vibration_count = 0
+        self.ep_checkpoints_hit = 0
+
+                # Total checkpoints is waypoints minus the starting point
+        self.total_checkpoints = max(1, len(self.waypoints) - 1)
+
         # 1. Bypass MapBank, generate a completely new 40x40 map
         self.map_grid, self.waypoints, self.resolution = MapGenerator.generate(40, 40)
             
