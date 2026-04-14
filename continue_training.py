@@ -32,41 +32,46 @@ def main():
         print(f"Error: {e}")
         return
 
+    # --- STATIC RUN CONFIGURATION ---
+    # You MUST change this string manually if you start a completely new continuation run,
+    # otherwise you will overwrite your previous checkpoints.
+    RUN_NAME = "BEANS_Continued_v2" 
+    
     # --- CALLBACK SETUP ---
     curriculum_cb = CompetenceCurriculumCallback()
-    
-    # CRITICAL MANUAL OVERRIDE:
-    # You must set this index to match wherever your previous training run left off.
-    # 0 = Tier 0.05, 1 = Tier 0.10, 2 = Tier 0.25, 3 = Tier 0.50, 4 = Tier 0.75, 5 = Tier 1.0
     curriculum_cb.current_tier_idx = 3 
-    
     telemetry_cb = TelemetryLoggerCallback()
     
-    run_id = int(time.time())
+    # The callback will automatically generate files like: "BEANS_Continued_v2_50000_steps.zip"
     checkpoint_cb = CheckpointCallback(
         save_freq=50000 // N_ENVS, 
         save_path=MODEL_DIR,
-        name_prefix=f"BEANS_Continued_{run_id}"
+        name_prefix=RUN_NAME
     )
     callback_list = CallbackList([checkpoint_cb, telemetry_cb, curriculum_cb])
     
     # --- EXECUTION ---
-    print(f"Resuming training for {ADDITIONAL_TIMESTEPS} timesteps...")
+    print(f"Resuming training for {ADDITIONAL_TIMESTEPS} timesteps under name: {RUN_NAME}...")
     try:
         model.learn(
             total_timesteps=ADDITIONAL_TIMESTEPS, 
             callback=callback_list, 
-            tb_log_name=f"PPO_Continued_Run_{run_id}", 
+            tb_log_name=RUN_NAME, 
             progress_bar=True,
-            # reset_num_timesteps=False ensures TensorBoard continues the x-axis 
-            # from where it left off, rather than resetting to Step 0.
-            reset_num_timesteps=False 
+            reset_num_timesteps=False # CRITICAL: Keeps your global step count accurate
         )
-        model.save(os.path.join(MODEL_DIR, f"BEANS_Continued_Final_{run_id}"))
-        print("Training expansion complete. Model saved.")
+        
+        # Grab the absolute total step count directly from the model's brain for the final save
+        final_steps = model.num_timesteps
+        final_save_path = os.path.join(MODEL_DIR, f"{RUN_NAME}_Final_{final_steps}_steps")
+        
+        model.save(final_save_path)
+        print(f"Training expansion complete. Final model saved to: {final_save_path}")
+        
     except KeyboardInterrupt:
-        print("\nSaving progress before shutdown...")
-        model.save(os.path.join(MODEL_DIR, f"BEANS_Continued_Interrupted_{run_id}"))
+        print("\nInterrupt detected. Saving emergency checkpoint...")
+        current_steps = model.num_timesteps
+        model.save(os.path.join(MODEL_DIR, f"{RUN_NAME}_Interrupted_{current_steps}_steps"))
 
 if __name__ == "__main__":
     main()
