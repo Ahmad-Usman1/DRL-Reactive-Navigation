@@ -19,7 +19,7 @@ class MapGenerator:
         return np.all(pf_matrix[ys, xs] == 1)
 
     @staticmethod
-    def generate(size_x=40, size_y=40, difficulty=1.0):
+    def generate(size_x=40, size_y=40, difficulty=0.1):
         resolution = 50  
         grid_w = int(size_x * resolution)
         grid_h = int(size_y * resolution)
@@ -237,8 +237,8 @@ class MapGenerator:
 
             return grid_map, sparse_waypoints, resolution
 
-        @staticmethod
-        def create_fallback_slalom(size_x, size_y, resolution):
+    @staticmethod
+    def create_fallback_slalom(size_x, size_y, resolution):
             """
             RANDOMIZED SLALOM: A brutal but UNIQUE fallback map.
             Prevents dataset poisoning by ensuring no two fallback maps are identical.

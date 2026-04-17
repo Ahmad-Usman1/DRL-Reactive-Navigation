@@ -13,10 +13,10 @@ LOG_DIR = "./ppo_tensorboard/"
 MODEL_DIR = "./saved_models/"
 
 # UPDATE THIS: Point this directly to your newly trained 4m/0.4v model file
-BASE_MODEL_PATH = os.path.join(MODEL_DIR, "YOUR_MODEL_NAME_HERE") 
+BASE_MODEL_PATH = os.path.join(MODEL_DIR, "BEANS_PPO_Adaptive_1800000_steps") 
 
 ADDITIONAL_TIMESTEPS = 5_000_000 
-N_ENVS = 4 
+N_ENVS = 10 
 
 def main():
     print("--- Booting BEANS Continuation Pipeline ---")
@@ -39,7 +39,7 @@ def main():
     
     # --- CALLBACK SETUP ---
     curriculum_cb = CompetenceCurriculumCallback()
-    curriculum_cb.current_tier_idx = 3 
+    curriculum_cb.current_tier_idx = 4 
     telemetry_cb = TelemetryLoggerCallback()
     
     # The callback will automatically generate files like: "BEANS_Continued_v2_50000_steps.zip"

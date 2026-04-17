@@ -54,10 +54,10 @@ class PeopleBotEnv(gym.Env):
         self.robot_radius = 0.31    
         
         # Kinematic Limits
-        self.max_lin_vel = 0.8 
+        self.max_lin_vel = 0.4 
         # BRUTAL FIX: If rear sensors are removed, reverse MUST be disabled.
         self.min_lin_vel = 0.0     
-        self.max_ang_vel = 2.5 
+        self.max_ang_vel = 2.0 
 
         # --- DELAY SIMULATION (ACTION STACKING) ---
         self.dt = 0.1
@@ -80,8 +80,8 @@ class PeopleBotEnv(gym.Env):
         
         # Sensor & Nav
         self.max_sensor_range = 5.0
-        self.waypoint_radius = 1.0  
-        self.goal_radius = 1.0      
+        self.waypoint_radius = 2.5  
+        self.goal_radius = 1.5      
         
         # --- THE ESP32-CAM DENSITY UPGRADE ---
         # Physical Sonars + ESP32 Virtual Bins tightly packed in the +/- 30 deg FOV
@@ -108,7 +108,7 @@ class PeopleBotEnv(gym.Env):
         self.current_goal = np.zeros(2)
         self.previous_distance = 0.0
         self.current_step = 0
-        self.max_steps = 2000  
+        self.max_steps = 3000  
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -232,23 +232,28 @@ class PeopleBotEnv(gym.Env):
         truncated = False
         reward = -0.1 
         
+        # Danger Zones
+        front_dist = np.min(scan_data[self.front_indices])
+        side_dist = np.min(scan_data[self.side_indices])
+        min_dist = np.min([front_dist,side_dist])
+
         # Progress & Heading
         dist_improvement = self.previous_distance - dist_to_goal
         reward += (5.0 * dist_improvement) 
         self.previous_distance = dist_to_goal
-        reward += (2.0 * math.cos(heading_error)) * max(0, self.current_lin_vel)
-            
-        # Danger Zones
-        front_dist = np.min(scan_data[self.front_indices])
-        side_dist = np.min(scan_data[self.side_indices])
+        if min_dist > 0.4:
+            reward += (2.0 * math.cos(heading_error)) * max(0, self.current_lin_vel)
+        if (min_dist < 0.4 and self.current_lin_vel > 0.2):
+            reward -= 2 * (self.current_lin_vel/min_dist)
+        
         
         if front_dist < 0.8:
             danger_front = (0.8 - front_dist) ** 2
             reward -= danger_front * (2.0 + 10.0 * max(0, self.current_lin_vel))
             
-        if side_dist < 0.35:
-            danger_side = (0.35 - side_dist) ** 2
-            reward -= danger_side * 5.0 
+        if side_dist < 0.4:
+            danger_side = (0.4 - side_dist) ** 2
+            reward -= danger_side * 6 
 
         if hit_checkpoint:
             reward += 10.0

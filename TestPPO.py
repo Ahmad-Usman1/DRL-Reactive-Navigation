@@ -77,7 +77,7 @@ def main():
         
     # Grab the most recently saved model
     print(sorted(models))
-    latest_model = sorted(models)[-1]
+    latest_model = 'BEANS_Continued_v2_Final_6817600_steps'
     load_path = os.path.join(MODEL_DIR, latest_model).replace(".zip", "")
     
     print(f"Loading Brain: {load_path}")
