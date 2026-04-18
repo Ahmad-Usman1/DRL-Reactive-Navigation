@@ -77,11 +77,11 @@ def main():
         
     # Grab the most recently saved model
     print(sorted(models))
-    latest_model = 'BEANS_Continued_v2_Final_6817600_steps'
+    latest_model = 'BEANS_PPO_Adaptive_2600000_steps'
     load_path = os.path.join(MODEL_DIR, latest_model).replace(".zip", "")
     
-    print(f"Loading Brain: {load_path}")
-    model = PPO.load(load_path)
+    print("Loading Brain: finetune_modelsv3/BEANS_FineTuned_2900000_steps.zip")
+    model = PPO.load("finetune_modelsv3/BEANS_FineTuned_2900000_steps.zip")
 
     # 2. Load Dynamic Environment
     env = DynamicTestEnv()

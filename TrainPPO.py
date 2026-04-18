@@ -15,7 +15,7 @@ from stable_baselines3.common.vec_env import SubprocVecEnv
 LOG_DIR = "./ppo_tensorboard/"
 MODEL_DIR = "./saved_models/"
 TOTAL_TIMESTEPS = 6_000_000
-N_ENVS = 10  # Optimized for i3-1215U (2P + 4E Cores)
+N_ENVS = 16  # Optimized for i3-1215U (2P + 4E Cores)
 
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)

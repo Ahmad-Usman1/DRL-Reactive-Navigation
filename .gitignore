@@ -42,3 +42,37 @@ Test_mapbank.py
 training_maps/
 ppo_tensorboard/
 saved_models/
+
+# Additional model/checkpoint folders
+1M model/
+finetune_models/
+finetune_models1/
+finetune_modelsv2/
+finetune_modelsv3/
+saved_models_1/
+
+# Experiment outputs and logs
+finetune_tensorboard/
+ab_test_results/
+ab_test_results1/
+comparison_results/
+ppo_test_results/
+reactive_test_results/
+test_results/
+test_results1/
+
+# One-off scripts
+Reward_profiler.py
+export_beans_onnx.py
+export_beans_onnx.py
+comparemodels.py
+Benchmark.py
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*.log
+~$*

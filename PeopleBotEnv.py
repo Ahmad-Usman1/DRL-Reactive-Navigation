@@ -57,7 +57,7 @@ class PeopleBotEnv(gym.Env):
         self.max_lin_vel = 0.4 
         # BRUTAL FIX: If rear sensors are removed, reverse MUST be disabled.
         self.min_lin_vel = 0.0     
-        self.max_ang_vel = 2.0 
+        self.max_ang_vel = 1.9 
 
         # --- DELAY SIMULATION (ACTION STACKING) ---
         self.dt = 0.1
@@ -79,9 +79,9 @@ class PeopleBotEnv(gym.Env):
         self.tipping_threshold = 2.0 
         
         # Sensor & Nav
-        self.max_sensor_range = 5.0
-        self.waypoint_radius = 2.5  
-        self.goal_radius = 1.5      
+        self.max_sensor_range = 3.0
+        self.waypoint_radius = 1.5  
+        self.goal_radius = 1.0      
         
         # --- THE ESP32-CAM DENSITY UPGRADE ---
         # Physical Sonars + ESP32 Virtual Bins tightly packed in the +/- 30 deg FOV
@@ -227,48 +227,55 @@ class PeopleBotEnv(gym.Env):
                                    self.current_goal[0] - self.current_pose[0])
         heading_error = self._angdiff(self.current_pose[2], desired_angle)
 
-        # 11. Reward Architecture
+        # 11. Reward Architecture (Balanced for Navigation Stack)
         terminated = False
         truncated = False
-        reward = -0.1 
         
-        # Danger Zones
-        front_dist = np.min(scan_data[self.front_indices])
-        side_dist = np.min(scan_data[self.side_indices])
-        min_dist = np.min([front_dist,side_dist])
+        # 1. Base Step Penalty: Small constant bleed to punish meandering
+        reward = -0.05 
+        
+        # --- Distance Variables ---
+        front_dist = float(np.min(scan_data[self.front_indices]))
+        side_dist = float(np.min(scan_data[self.side_indices]))
 
-        # Progress & Heading
+        # --- 2. Progress ---
         dist_improvement = self.previous_distance - dist_to_goal
-        reward += (5.0 * dist_improvement) 
+        reward += 10.0 * dist_improvement
         self.previous_distance = dist_to_goal
-        if min_dist > 0.4:
-            reward += (2.0 * math.cos(heading_error)) * max(0, self.current_lin_vel)
-        if (min_dist < 0.4 and self.current_lin_vel > 0.2):
-            reward -= 2 * (self.current_lin_vel/min_dist)
-        
-        
-        if front_dist < 0.8:
-            danger_front = (0.8 - front_dist) ** 2
-            reward -= danger_front * (2.0 + 10.0 * max(0, self.current_lin_vel))
-            
-        if side_dist < 0.4:
-            danger_side = (0.4 - side_dist) ** 2
-            reward -= danger_side * 6 
 
+        # --- 3. The Velocity Budget (The Speed Governor) ---
+        SPEED_SCALE_DIST = 1.5 
+        # budget_ratio goes from 0.0 (touching wall) to 1.0 (open space)
+        budget_ratio = np.clip(front_dist / SPEED_SCALE_DIST, 0.0, 1.0)
+        desired_max_v = budget_ratio * self.max_lin_vel
+        
+        velocity_excess = max(0.0, self.current_lin_vel - desired_max_v)
+        if velocity_excess > 0.01:
+            reward -= 10.0 * velocity_excess 
+
+        # --- 4. Dynamic Heading & Steering ---
+        # The heading penalty scales with the budget_ratio. 
+        # Open space (ratio=1.0) = full penalty for weaving. 
+        # Near walls (ratio=0.3) = penalty shrinks to 30%, allowing large evasive maneuvers.
+        reward -= 1.5 * (1.0 - math.cos(heading_error)) * budget_ratio
+
+
+        # --- 5. Waypoints & Terminals ---
         if hit_checkpoint:
-            reward += 10.0
+            # Base +10 for hitting it, up to +25 bonus for a perfectly straight approach
+            approach_quality = max(0.0, math.cos(heading_error))
+            reward += 10.0 + (25.0 * approach_quality)
             self.ep_checkpoints_hit += 1
 
-        # Terminal States
         if is_collided or is_tipped:
-            reward = -150.0 
+            reward -= 500.0  # Crashing is always the worst outcome
             terminated = True
         elif hit_final_goal:
-            reward = 200.0
+            reward += 500.0  # Final success must out-weigh all waypoints combined
             terminated = True
             
         if self.current_step >= self.max_steps and not hit_final_goal:
-            reward = -150.0 
+            reward -= 150.0  
             truncated = True
 
         # 12. Telemetry Update

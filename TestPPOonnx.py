@@ -19,8 +19,8 @@ from MapGenerator import MapGenerator
 
 # --- CONFIGURATION ---
 MODEL_DIR = "Performing_Models"
-PYTORCH_MODEL = "BEANS_Continued_v2_Final_6817600_steps.zip" # Make sure this matches your best model
-ONNX_FILENAME = "BEANS_Continued_v2_Final_6817600_steps.onnx" # Make sure this matches the exported ONNX file
+PYTORCH_MODEL = "BEANS_FineTuned_3600000_steps.zip" # Make sure this matches your best model
+ONNX_FILENAME = "BEANS_FineTuned_3600000_steps.onnx" # Make sure this matches the exported ONNX file
 
 class CompareEnv(PeopleBotEnv):
     def inject_frozen_map(self, grid, waypoints, resolution):

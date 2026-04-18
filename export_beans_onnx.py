@@ -19,8 +19,8 @@ class NakedPPOPolicy(nn.Module):
 
 def export_beans_onnx_midas_method():
     print("--- BEANS ONNX Policy Extractor (The MiDaS Protocol) ---")
-    model_path = "saved_models/BEANS_PPO_Phase3_Final"
-    onnx_path = "saved_models/beans_policy.onnx"
+    model_path = "Performing_Models\\BEANS_FineTuned_3600000_steps.zip"
+    onnx_path = "Performing_Models\\beans_policy.onnx"
     
     print(f"Loading heavy SB3 model from {model_path}...")
     try:
