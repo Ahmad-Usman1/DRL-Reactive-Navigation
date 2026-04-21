@@ -50,6 +50,9 @@ finetune_models1/
 finetune_modelsv2/
 finetune_modelsv3/
 saved_models_1/
+finetune_models_v3
+finetune_models_v3_phase2/
+finetune_models_v3_phase2b/
 
 # Experiment outputs and logs
 finetune_tensorboard/
@@ -60,6 +63,10 @@ ppo_test_results/
 reactive_test_results/
 test_results/
 test_results1/
+finetune_tensorboard_v3/
+models_beans_v3/
+test_results_v3/
+tensorboard_beans_v3/
 
 # One-off scripts
 Reward_profiler.py
@@ -67,6 +74,8 @@ export_beans_onnx.py
 export_beans_onnx.py
 comparemodels.py
 Benchmark.py
+GenerateDifficulty08maps.py
+
 
 # Temporary files
 *.tmp

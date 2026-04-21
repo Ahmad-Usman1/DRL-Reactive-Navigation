@@ -3,26 +3,28 @@ import numpy as np
 import matplotlib.pyplot as plt
 from stable_baselines3 import PPO
 
-from FineTunePPO import FineTuneBotEnv
+# --- V3 IMPORTS ---
+from Finetune_V3 import FineTuneBotEnv_V3
 from FineTuneMaps import (
     CornerGauntletMap, 
     PinchPointMap, 
     ClutterCorridorMap, 
     ForkTrapMap, 
     BlindCornerMap, 
-
 )
 
 # Define the model path
-MODEL_PATH = "./finetune_models1/BEANS_FineTuned_Final"
+MODEL_PATH = "finetune_models_v3/BEANS_V3_FineTuned_1700000_steps.zip"
 
 def evaluate_map(env, model, map_class):
     """Generates a specific map, injects it into the env, and runs the policy."""
     # 1. Generate specialized map
     grid, waypoints, res = map_class.generate(size_x=40, size_y=40)
     
-    # 2. Reset env and forcefully inject the custom map geometry
+    # 2. Reset env (Crucial in V3 to flush the action and sensor FIFOs)
     env.reset()
+    
+    # Forcefully inject the custom map geometry
     env.map_grid = grid.copy()
     env.waypoints = waypoints.copy()
     env.resolution = res
@@ -39,6 +41,10 @@ def evaluate_map(env, model, map_class):
     env.current_pose = np.array([waypoints[0][0], waypoints[0][1], start_theta])
     env.current_lin_vel = 0.0
     env.current_ang_vel = 0.0
+    
+    # CRITICAL V3 FIX: Update the distance trackers after teleporting the robot
+    env.previous_distance = float(np.linalg.norm(env.current_pose[:2] - env.current_goal))
+    env.ft_previous_distance = env.previous_distance
     
     # 3. Execute the policy
     obs = env._get_obs()
@@ -61,13 +67,15 @@ def evaluate_map(env, model, map_class):
     return grid, waypoints, res, np.array(trajectory), outcome
 
 def main():
-    if not os.path.exists(MODEL_PATH + ".zip") and not os.path.exists(MODEL_PATH):
-        print(f"[ERROR] Model not found at: {MODEL_PATH}")
+    # Allow for loading without the .zip extension explicitly written
+    actual_path = MODEL_PATH if MODEL_PATH.endswith(".zip") else MODEL_PATH + ".zip"
+    if not os.path.exists(actual_path):
+        print(f"[ERROR] Model not found at: {actual_path}")
         return
 
-    print("Loading FineTuned Model...")
-    env = FineTuneBotEnv()
-    model = PPO.load(MODEL_PATH, env=env)
+    print("Loading FineTuned V3 Model...")
+    env = FineTuneBotEnv_V3()
+    model = PPO.load(actual_path, env=env)
 
     maps_to_test = [
         ("Corner Gauntlet (Braking)", CornerGauntletMap),
@@ -75,14 +83,19 @@ def main():
         ("Clutter Corridor (Weaving)", ClutterCorridorMap),
         ("Fork Trap (Branch Choice)", ForkTrapMap),
         ("Blind Corner (Ambush)", BlindCornerMap),
-
     ]
 
-    # Create a 2x3 grid to fit all 6 maps
+    # Create a 2x3 grid to fit all 5 maps
     fig, axes = plt.subplots(2, 3, figsize=(22, 12))
     axes = axes.flatten()
     
-    for ax, (title, map_class) in zip(axes, maps_to_test):
+    for i, ax in enumerate(axes):
+        # Hide the 6th empty subplot
+        if i >= len(maps_to_test):
+            ax.axis('off')
+            continue
+            
+        title, map_class = maps_to_test[i]
         print(f"Executing: {title}...")
         grid, waypoints, res, trajectory, outcome = evaluate_map(env, model, map_class)
         

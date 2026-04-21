@@ -19,7 +19,7 @@ class MapGenerator:
         return np.all(pf_matrix[ys, xs] == 1)
 
     @staticmethod
-    def generate(size_x=40, size_y=40, difficulty=1.0):
+    def generate(size_x=40, size_y=40, difficulty=0.75):
         resolution = 50  
         grid_w = int(size_x * resolution)
         grid_h = int(size_y * resolution)

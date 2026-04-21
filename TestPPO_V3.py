@@ -13,23 +13,28 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Circle, Arrow
 from stable_baselines3 import PPO
 
-from PeopleBotEnv import PeopleBotEnv
+# --- V3 IMPORTS ---
+from PeopleBotEnv_V3 import PeopleBotEnv
 from MapGenerator import MapGenerator
 import matplotlib.gridspec as gridspec
 from matplotlib.collections import LineCollection
 
 # --- CONFIGURATION ---
-MODEL_DIR = "saved_models"
-MODEL_PREFIX = "BEANS_PPO"
+MODEL_DIR = "finetune_models_v3_phase2b"
+MODEL_PREFIX = "BEANS_V3"
 RENDER_FPS = 30 
 RENDER_SKIP = 2 
 
 # --- DYNAMIC TEST ENVIRONMENT ---
-class DynamicTestEnv(PeopleBotEnv):
+class DynamicTestEnv_V3(PeopleBotEnv):
     """Overrides the reset function to generate fresh maps dynamically instead of using the RAM Bank."""
     def reset(self, seed=None, options=None):
-        # Explicitly call the base Gym reset to handle random seeds, skipping PeopleBotEnv's reset
+        # Explicitly call the base Gym reset to handle random seeds
         gym.Env.reset(self, seed=seed)
+        
+        # --- V3 SPECIFIC: FLUSH DELAY FIFOS ---
+        self.action_history = np.zeros((self.lag_steps, 2), dtype=np.float32)
+        self._init_sensor_fifos()
         
         # --- TELEMETRY TRACKERS ---
         self.ep_velocity_history = []
@@ -37,143 +42,55 @@ class DynamicTestEnv(PeopleBotEnv):
         self.ep_vibration_count = 0
         self.ep_checkpoints_hit = 0
 
-                # Total checkpoints is waypoints minus the starting point
-        self.total_checkpoints = max(1, len(self.waypoints) - 1)
-
         # 1. Bypass MapBank, generate a completely new 40x40 map
         self.map_grid, self.waypoints, self.resolution = MapGenerator.generate(40, 40)
+        self.total_checkpoints = max(1, len(self.waypoints) - 1)
             
         start_pt = self.waypoints[0]
         if len(self.waypoints) > 1:
             self.current_goal_index = 1
-            self.current_goal = np.array(self.waypoints[1])
+            self.current_goal = np.array(self.waypoints[1], dtype=np.float32)
             start_theta = math.atan2(self.current_goal[1] - start_pt[1], 
                                      self.current_goal[0] - start_pt[0])
         else:
             self.current_goal_index = 0
-            self.current_goal = np.array(start_pt)
+            self.current_goal = np.array(start_pt, dtype=np.float32)
             start_theta = 0.0
             
         self.current_pose = np.array([start_pt[0], start_pt[1], start_theta])
         self.current_lin_vel = 0.0
         self.current_ang_vel = 0.0
-        self.previous_distance = np.linalg.norm(self.current_pose[:2] - self.current_goal)
+        self.previous_distance = float(np.linalg.norm(self.current_pose[:2] - self.current_goal))
         self.current_step = 0
         
+        # Pull safe 25-dim obs via V3 helper
         return self._get_obs(), {}
 
 def main():
-    print("--- DIAGNOSTIC PIPELINE ACTIVATED ---")
+    print("--- DIAGNOSTIC PIPELINE ACTIVATED (V3) ---")
     
     # 1. Load Model
     if not os.path.exists(MODEL_DIR):
-        print(f"FATAL ERROR: Directory '{MODEL_DIR}' not found.")
+        print(f"FATAL ERROR: Directory '{MODEL_DIR}' not found. Have you trained a V3 model yet?")
         return
         
     models = [f for f in os.listdir(MODEL_DIR) if f.endswith(".zip")]
     if not models:
-        print("FATAL ERROR: No trained models found in directory.")
+        print(f"FATAL ERROR: No trained models found in {MODEL_DIR}.")
         return
         
-    # Grab the most recently saved model
-    print(sorted(models))
-    latest_model = 'BEANS_PPO_Adaptive_2600000_steps'
-    load_path = os.path.join(MODEL_DIR, latest_model).replace(".zip", "")
-    
-    print("Loading Brain: models_beans_v3/BEANS_V3_3000000_steps.zip")
-    model = PPO.load("models_beans_v3/BEANS_V3_3000000_steps.zip")
+    # Attempt to grab the final model, otherwise grab the latest checkpoint
+    latest_model = "BEANS_V3_Phase2b_Final.zip"
+    if latest_model not in models:
+        # Sort to get highest step count
+        latest_model = sorted(models)[-1]
+
+    load_path = os.path.join(MODEL_DIR, latest_model)
+    print(f"Loading Brain: {load_path}")
+    model = PPO.load(load_path)
 
     # 2. Load Dynamic Environment
-    env = DynamicTestEnv()
-
-    # # ==========================================
-    # # PHASE 1: VISUALIZATION (3 MAPS)
-    # # ==========================================
-    # print("\n--- PHASE 1: VISUAL EVALUATION (3 MAPS) ---")
-    # plt.ion()
-    # fig, ax = plt.subplots(figsize=(10, 10))
-    # ax.set_aspect('equal')
-    
-    # for ep in range(3):
-    #     obs, _ = env.reset()
-    #     done = False
-    #     truncated = False
-    #     total_reward = 0
-    #     step_count = 0
-        
-    #     ax.clear()
-    #     ax.set_title(f"Visual Run {ep+1}/3")
-        
-    #     # Plot Map (Fixed for 40x40m bounds)
-    #     ax.imshow(1 - env.map_grid, cmap='Greys', origin='lower', 
-    #               extent=[0, 40, 0, 40], vmin=0, vmax=1)
-        
-    #     # Plot Global Waypoint Path
-    #     wp_array = np.array(env.waypoints)
-    #     ax.plot(wp_array[:, 0], wp_array[:, 1], 'r--', alpha=0.5, zorder=4, label='Global Path')
-        
-    #     robot_patch = Circle((env.current_pose[0], env.current_pose[1]), env.robot_radius, color='blue', zorder=10, alpha=0.8, label='Robot')
-    #     ax.add_patch(robot_patch)
-        
-    #     arrow_patch = Arrow(0, 0, 0.5, 0, width=0.3, color='yellow', zorder=11)
-    #     ax.add_patch(arrow_patch)
-        
-    #     goal_patch, = ax.plot([env.current_goal[0]], [env.current_goal[1]], 'g*', markersize=18, zorder=9, label='Current Goal')
-    #     goal_zone = Circle((env.current_goal[0], env.current_goal[1]), env.waypoint_radius, color='green', fill=False, linestyle='--', linewidth=2, zorder=8)
-    #     ax.add_patch(goal_zone)
-        
-    #     lidar_lines = [Line2D([], [], color='red', linewidth=1, alpha=0.5, zorder=5) for _ in range(16)]
-    #     for l in lidar_lines: ax.add_line(l)
-        
-    #     stats_text = ax.text(0.5, 39.5, 'Initializing...', color='black', fontsize=10, 
-    #                          fontfamily='monospace', fontweight='bold', verticalalignment='top',
-    #                          bbox=dict(facecolor='white', alpha=0.9, edgecolor='black', boxstyle='round'))
-        
-    #     ax.legend(loc='upper right')
-        
-    #     while not done and not truncated:
-    #         # Deterministic=True tests the pure policy without exploration noise
-    #         action, _ = model.predict(obs, deterministic=True)
-    #         obs, reward, done, truncated, info = env.step(action)
-    #         total_reward += reward
-    #         step_count += 1
-            
-    #         if step_count % RENDER_SKIP == 0:
-    #             rx, ry, theta = env.current_pose
-    #             gx, gy = env.current_goal 
-                
-    #             robot_patch.center = (rx, ry)
-    #             arrow_patch.remove()
-    #             arrow_patch = Arrow(rx, ry, 0.6*math.cos(theta), 0.6*math.sin(theta), width=0.3, color='yellow', zorder=11)
-    #             ax.add_patch(arrow_patch)
-                
-    #             goal_patch.set_data([gx], [gy])
-    #             goal_zone.center = (gx, gy)
-                
-    #             scan = obs[:16]
-    #             angles = theta + env.sensor_angles
-    #             for i, line in enumerate(lidar_lines):
-    #                 dist = scan[i]
-    #                 if dist < env.max_sensor_range * 0.95:
-    #                     ex = rx + dist * math.cos(angles[i])
-    #                     ey = ry + dist * math.sin(angles[i])
-    #                     line.set_data([rx, ex], [ry, ey])
-    #                 else:
-    #                     line.set_data([], [])
-                
-    #             hud_txt = (f"Vel: {env.current_lin_vel:.2f} m/s\n"
-    #                        f"Ang: {env.current_ang_vel:.2f} rad/s\n"
-    #                        f"Rew: {total_reward:.1f}\n"
-    #                        f"Step: {step_count}/{env.max_steps}")
-    #             stats_text.set_text(hud_txt)
-                
-    #             plt.draw()
-    #             plt.pause(1 / RENDER_FPS)
-                
-    #     time.sleep(1.0) # Pause to see final result
-
-    # plt.ioff()
-    # plt.close()
+    env = DynamicTestEnv_V3()
 
     # ==========================================
     # PHASE 2: DIAGNOSTIC DASHBOARD (20 MAPS)
@@ -186,7 +103,7 @@ def main():
     timeout_count = 0
     
     # Create directory for reports
-    report_dir = "test_results"
+    report_dir = "test_results_v3"
     os.makedirs(report_dir, exist_ok=True)
     
     for ep in range(num_headless):
@@ -195,6 +112,7 @@ def main():
         truncated = False
         step_count = 0
         total_reward = 0.0
+        outcome = "UNKNOWN"
         
         # Telemetry Arrays
         hist_x, hist_y = [], []
@@ -213,16 +131,18 @@ def main():
             step_count += 1
             total_reward += reward
             
-        # Analyze outcome
-        if done and reward <= -10.0: 
-            outcome = "CRASHED"
-            crash_count += 1
-        elif done:
-            outcome = "SUCCESS"
-            success_count += 1
-        elif truncated:
-            outcome = "TIMEOUT"
-            timeout_count += 1
+            # Pull outcome strictly from V3 Telemetry dict
+            if done or truncated:
+                tel = info.get("telemetry", {})
+                if tel.get("rate_crash", 0.0) == 1.0:
+                    outcome = "CRASHED"
+                    crash_count += 1
+                elif tel.get("rate_success", 0.0) == 1.0:
+                    outcome = "SUCCESS"
+                    success_count += 1
+                else:
+                    outcome = "TIMEOUT"
+                    timeout_count += 1
             
         progress_pct = (env.current_goal_index / len(env.waypoints)) * 100
         print(f"Map {ep+1:02d} | Result: {outcome:<7} | Steps: {step_count:04d} | Reward: {total_reward:7.1f} | Path Cleared: {progress_pct:5.1f}%")
